@@ -1,0 +1,11 @@
+{
+  "name": "bier",
+  "version": "1.0.0",
+  "description": "BIER - a retro MS-DOS-style game about a worker bee tending a hive in a hollow oak. Sibling to MAUR.",
+  "scripts": {
+    "test": "node test/smoke.js && node test/loop.js && node test/win.js && node test/saveload.js"
+  },
+  "keywords": ["game", "bees", "retro", "dos", "canvas", "liero"],
+  "author": "",
+  "license": "ISC"
+}
