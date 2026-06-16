@@ -62,19 +62,17 @@ function flyStep(e) {
   e.y = clamp(e.y, 8, WORLD_H - 8);
 }
 
-// move a flier between the outside world and the hive interior through the
-// knothole. Both share x/y; only the collision layer and what's drawn differ.
+// move an NPC flier between the outside world and the hive interior through the
+// knothole. NPCs transition by intent (e.wantInside) so a bee working the comb
+// never accidentally drifts back out. (The player crosses via the animated iris
+// in updateHiveTransition; player bees never call this.)
 function crossDoor(e) {
   const h = Comb.hive;
   if (e.layerCd > 0) { e.layerCd--; return; }
-  if (!e.inside) {
-    if (dist2(e.x, e.y, h.entrance.x, h.entrance.y) < 121) {
-      e.inside = true; e.x = h.dropIn.x; e.y = h.dropIn.y; e.vx *= 0.3; e.vy *= 0.3; e.layerCd = 28;
-    }
-  } else {
-    if (dist2(e.x, e.y, h.inner.x, h.inner.y) < 121) {
-      e.inside = false; e.x = h.dropOut.x; e.y = h.dropOut.y; e.vx *= 0.3; e.vy *= 0.3; e.layerCd = 28;
-    }
+  if (!e.inside && e.wantInside && dist2(e.x, e.y, h.entrance.x, h.entrance.y) < 196) {
+    e.inside = true; e.x = h.dropIn.x; e.y = h.dropIn.y; e.vx *= 0.3; e.vy *= 0.3; e.layerCd = 20;
+  } else if (e.inside && !e.wantInside && dist2(e.x, e.y, h.inner.x, h.inner.y) < 196) {
+    e.inside = false; e.x = h.dropOut.x; e.y = h.dropOut.y; e.vx *= 0.3; e.vy *= 0.3; e.layerCd = 20;
   }
 }
 
@@ -104,6 +102,7 @@ class Bee {
     this.stingCd = 0;
     this.flash = 0;
     this.inside = inCavity(x, y);   // which layer: hive interior vs open air
+    this.wantInside = this.inside;  // which layer the bee currently wants to be on
     this.layerCd = 0;
     this.wanderA = Math.random() * Math.PI * 2;
     this.homeT = 0;
@@ -171,6 +170,9 @@ class Bee {
 
   npcThink() {
     const Hv = G.hive;
+    // by default a bee wants to be in the hive; foraging / outdoor combat flips
+    // this so the door transition knows the bee's intent (set per state below)
+    this.wantInside = true;
 
     // threat response (non-guards flee, guards/queen stand)
     const threat = G.nearestThreat(this.x, this.y, this.caste === 'guard' ? 150 : 64);
@@ -206,6 +208,7 @@ class Bee {
       }
 
       case 'forage': {
+        this.wantInside = false;   // out to the meadow
         if (this.loaded()) { this.state = 'store'; this.target = null; break; }
         // pick a flower with stock
         if (!this.target || this.target.dead || (this.target.nectar < 0.5 && this.target.pollen < 0.5)) {
@@ -324,6 +327,7 @@ class Bee {
 
       case 'guard': {
         this.stateT--;
+        this.wantInside = false;   // patrol the entrance from outside
         const t = G.nearestThreat(this.x, this.y, 220);
         if (t) { this.state = 'fight'; this.target = t; break; }
         // patrol around the entrance
@@ -340,6 +344,7 @@ class Bee {
           : G.nearestThreat(this.x, this.y, 240);
         if (!t) { this.state = this.caste === 'guard' ? 'guard' : 'idle'; this.stateT = 120; break; }
         this.target = t;
+        this.wantInside = t.inside;   // follow the foe across the threshold
         if (this.hp < this.maxHp * 0.3 && this.caste !== 'guard') { this.state = 'flee'; this.stateT = 100; break; }
         const d = this.flyTo(t.x, t.y, this.def.accel);
         if (d < 11 && this.stingCd <= 0) {
@@ -536,10 +541,13 @@ class Flower {
 // Threats -- wasp, hornet, robber bee, spider
 // ---------------------------------------------------------------------------
 const THREAT_DEF = {
-  wasp:   { hp: 26, speed: 2.3, dmg: 6,  fly: true,  corpse: 0 },
-  hornet: { hp: 70, speed: 2.0, dmg: 12, fly: true,  corpse: 0 },
-  robber: { hp: 20, speed: 2.2, dmg: 4,  fly: true,  corpse: 0 },
-  spider: { hp: 40, speed: 0.0, dmg: 9,  fly: false, corpse: 0 },
+  wasp:   { hp: 26,  speed: 2.3,  dmg: 6,  fly: true,  corpse: 0 },
+  hornet: { hp: 70,  speed: 2.0,  dmg: 12, fly: true,  corpse: 0 },
+  robber: { hp: 20,  speed: 2.2,  dmg: 4,  fly: true,  corpse: 0 },
+  spider: { hp: 40,  speed: 0.0,  dmg: 9,  fly: false, corpse: 0 },
+  // VESPA CRABRO -- the giant European hornet. A phased boss: hunts bees,
+  // tears the brood apart, and enrages at low health, calling in wasps.
+  vespa:  { hp: 300, speed: 2.05, dmg: 16, fly: true,  corpse: 0 },
 };
 
 class Threat {
@@ -550,8 +558,10 @@ class Threat {
     this.x = x; this.y = y;
     this.vx = 0; this.vy = 0;
     this.maxSpeed = d.speed;
-    this.hw = (kind === 'hornet' || kind === 'spider') ? 5 : 3.5;
-    this.hh = (kind === 'hornet' || kind === 'spider') ? 3.5 : 2.5;
+    this.boss = kind === 'vespa';
+    this.hw = this.boss ? 8 : (kind === 'hornet' || kind === 'spider') ? 5 : 3.5;
+    this.hh = this.boss ? 5 : (kind === 'hornet' || kind === 'spider') ? 3.5 : 2.5;
+    this.summonCd = 480;     // boss enrage: time between calling in wasps
     this.hp = d.hp; this.maxHp = d.hp;
     this.dir = Math.random() < 0.5 ? -1 : 1;
     this.phase = Math.random() * 10;
@@ -562,21 +572,24 @@ class Threat {
     this.flash = 0;
     this.fleeing = false;
     this.loot = 0;           // robber's stolen honey
-    this.lifeT = 60 * 60;    // gives up eventually
+    this.lifeT = this.boss ? 1e9 : 60 * 60;   // a boss never gives up
     this.homeX = x < WORLD_W / 2 ? 12 : WORLD_W - 12;
     this.anchorX = x; this.anchorY = y;  // spider web anchor
     this.inside = inCavity(x, y);
+    this.wantInside = false;
     this.layerCd = 0;
   }
   get def() { return THREAT_DEF[this.kind]; }
-  get predator() { return this.kind === 'wasp' || this.kind === 'hornet' || this.kind === 'spider'; }
+  get predator() { return this.kind === 'wasp' || this.kind === 'hornet' || this.kind === 'spider' || this.boss; }
 
   hurt(dmg, kx, ky) {
     this.hp -= dmg;
     this.flash = 6;
-    this.vx += kx || 0; this.vy += ky || 0;
-    G.particles.blood(this.x, this.y, 4);
-    if (this.hp < this.maxHp * 0.3) this.fleeing = true;
+    // the boss is too heavy to be knocked far, and never flees -- it enrages
+    const k = this.boss ? 0.25 : 1;
+    this.vx += (kx || 0) * k; this.vy += (ky || 0) * k;
+    G.particles.blood(this.x, this.y, this.boss ? 6 : 4);
+    if (!this.boss && this.hp < this.maxHp * 0.3) this.fleeing = true;
     if (G.nearPlayer(this.x, this.y) < 220) Sfx.play('hurt');
   }
 
@@ -593,8 +606,49 @@ class Threat {
       case 'hornet': this.waspThink(); break;
       case 'robber': this.robberThink(); break;
       case 'spider': this.spiderThink(); break;
+      case 'vespa':  this.vespaThink(); break;
     }
     if (this.def.fly) { flyStep(this); crossDoor(this); }
+  }
+
+  // VESPA CRABRO boss: bites any bee that strays close, drives into the comb to
+  // shred the brood, and enrages below a third health -- faster, and summoning
+  // wasps to the assault. Never flees; must be brought down.
+  vespaThink() {
+    const d = this.def;
+    const enraged = this.hp < this.maxHp * 0.3;
+    const sp = d.speed * (enraged ? 1.3 : 1);
+
+    if (enraged && --this.summonCd <= 0) {
+      this.summonCd = 540;
+      const sx = this.x < WORLD_W / 2 ? 40 : WORLD_W - 40;
+      G.threats.push(new Threat(sx, T.surf[clamp(sx | 0, 0, WORLD_W - 1)] - 60, 'wasp'));
+      if (G.nearPlayer(this.x, this.y) < 420) Sfx.play('alarm');
+    }
+
+    // savage any bee in reach (the player included)
+    const near = G.nearestBee(this.x, this.y, 140);
+    if (near && this.biteCd <= 0 && dist2(this.x, this.y, near.x, near.y) < 240) {
+      near.hurt(d.dmg, Math.sign(near.x - this.x) * 1.8, -0.4);
+      this.biteCd = enraged ? 26 : 40;
+      if (G.nearPlayer(this.x, this.y) < 300) Sfx.play('sting');
+    }
+
+    // primary objective: tear the brood comb apart; else hunt bees; else loom
+    const cell = Comb.nearest(Comb.hive.broodCx, Comb.hive.broodCy, 9999,
+      c => c.type === 'larva' || c.type === 'pupa');
+    if (cell) {
+      this.wantInside = true;
+      const dd = this.flyTo(cell.x, cell.y, sp * 0.5);
+      if (dd < 12) {
+        cell.type = 'empty'; cell.amount = 0; cell.capped = false;
+        G.particles.blood(cell.x, cell.y, 5); this.biteCd = Math.max(this.biteCd, 18);
+      }
+    } else {
+      const prey = G.nearestBee(this.x, this.y, 420);
+      if (prey) { this.wantInside = prey.inside; this.flyTo(prey.x, prey.y, sp * 0.55); }
+      else { this.wantInside = false; this.goTo(Comb.hive.outer.x, Comb.hive.outer.y - 20, sp * 0.4); }
+    }
   }
 
   goTo(tx, ty, accel) {
@@ -618,6 +672,7 @@ class Threat {
   waspThink() {
     const d = this.def;
     if (this.fleeing) {
+      this.wantInside = false;
       this.goTo(this.homeX, this.y - 40, d.speed * 0.5);
       if (Math.abs(this.x - this.homeX) < 30) this.dead = true;
       return;
@@ -626,6 +681,7 @@ class Threat {
     let prey = G.nearestBee(this.x, this.y, this.kind === 'hornet' ? 320 : 200);
     if (prey) {
       this.target = prey;
+      this.wantInside = prey.inside;
       const dd = this.flyTo(prey.x, prey.y, d.speed * 0.5);
       if (dist2(this.x, this.y, prey.x, prey.y) < 100 && this.biteCd <= 0) {
         prey.hurt(d.dmg, this.dir * 1.0, -0.3);
@@ -636,10 +692,11 @@ class Threat {
       // raid the brood comb
       const larva = Comb.nearest(Comb.hive.broodCx, Comb.hive.broodCy, 9999, c => c.type === 'larva' || c.type === 'pupa');
       if (larva) {
+        this.wantInside = true;
         const dd = this.flyTo(larva.x, larva.y, d.speed * 0.45);
         if (dd < 9) { larva.type = 'empty'; larva.amount = 0; larva.capped = false; G.particles.blood(larva.x, larva.y, 4); this.biteCd = 30; }
-      } else this.patrol(d);
-    } else this.patrol(d);
+      } else { this.wantInside = false; this.patrol(d); }
+    } else { this.wantInside = false; this.patrol(d); }
   }
 
   patrol(d) {
@@ -654,12 +711,14 @@ class Threat {
     const d = this.def;
     if (this.fleeing || this.loot > 0.8) {
       this.fleeing = true;
+      this.wantInside = false;
       // carry the loot off the map
       this.flyTo(this.homeX, T.surf[clamp(this.x | 0, 0, WORLD_W - 1)] - 60, d.speed * 0.5);
       if (Math.abs(this.x - this.homeX) < 30) this.dead = true;
       return;
     }
     // dive into the hive and drain a honey cell
+    this.wantInside = true;
     const cell = (this.target && this.target.type === 'honey') ? this.target
       : Comb.nearest(Comb.hive.broodCx, Comb.hive.cavY0 + 30, 9999, c => c.type === 'honey' && c.amount > 0.1);
     if (!cell) { this.fleeing = true; return; }
@@ -722,6 +781,39 @@ class Threat {
         ctx.fillRect(3, -1, 2, 3);
         ctx.fillStyle = '#d02020';
         ctx.fillRect(4, 0, 1, 1);
+        ctx.restore();
+        break;
+      }
+      case 'vespa': {
+        // the giant hornet: long banded gaster, fuzzy brown thorax, big jaws
+        const enr = this.hp < this.maxHp * 0.3;
+        ctx.save();
+        ctx.translate(ex, ey);
+        ctx.scale(this.dir, 1);
+        const wup = (this.wing | 0) % 2;
+        // big translucent wings
+        ctx.fillStyle = 'rgba(236,242,252,0.7)';
+        ctx.fillRect(-6, -10 - wup, 11, 3);
+        ctx.fillRect(-2, -12 - wup, 8, 2);
+        // long abdomen, orange with black bands (redder when enraged)
+        ctx.fillStyle = fl ? '#fff' : (enr ? '#ff6e1c' : '#e8922a');
+        ctx.fillRect(-14, -4, 12, 8);
+        ctx.fillStyle = fl ? '#fff' : '#16100a';
+        for (let i = -12; i <= -3; i += 3) ctx.fillRect(i, -4, 1, 8);
+        ctx.fillRect(-16, -1, 2, 2);   // stinger
+        // fuzzy thorax
+        ctx.fillStyle = fl ? '#fff' : '#5c3c1e';
+        ctx.fillRect(-2, -4, 6, 8);
+        ctx.fillStyle = fl ? '#fff' : '#3a2410';
+        ctx.fillRect(-2, -4, 6, 2);
+        // head + mandibles
+        ctx.fillStyle = fl ? '#fff' : (enr ? '#d89820' : '#c8a02c');
+        ctx.fillRect(4, -3, 4, 6);
+        ctx.fillStyle = '#241606';
+        ctx.fillRect(8, -3, 2, 2); ctx.fillRect(8, 1, 2, 2);   // jaws
+        // glaring eyes
+        ctx.fillStyle = enr ? '#ff3018' : '#d83018';
+        ctx.fillRect(5, -2, 1, 1); ctx.fillRect(6, 1, 1, 1);
         ctx.restore();
         break;
       }

@@ -30,6 +30,7 @@ class Hive {
     this.starveT = 0;
     this.lastThreatDay = -1;
     this.lastDigTaskDay = -1;
+    this.lastVespaDay = -99;
     this.won = false;
     this.stats = {
       nectarGathered: 0, broodRaised: 0, beesBorn: 0,
@@ -291,6 +292,15 @@ class Hive {
       const x = Math.random() < 0.5 ? 40 : WORLD_W - 40;
       G.threats.push(new Threat(x, surfAt(x) - 70, 'hornet'));
       G.msg(L('m_hornet'), '#ff5030'); Sfx.play('alarm');
+    }
+    // VESPA CRABRO boss: a climactic raid on an established, well-stocked hive.
+    // One at a time, and never twice in quick succession.
+    if (count('vespa') === 0 && day >= 6 && this.honeyUnits > 140 &&
+        day > this.lastVespaDay + 2 && Math.random() < 0.0006) {
+      this.lastVespaDay = day;
+      const x = Math.random() < 0.5 ? 60 : WORLD_W - 60;
+      G.threats.push(new Threat(x, surfAt(x) - 120, 'vespa'));
+      G.msg(L('m_vespa'), '#ff3018'); Sfx.play('alarm');
     }
   }
 }

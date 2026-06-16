@@ -441,11 +441,17 @@ function updatePlay() {
     t.update();
     if (t.hp <= 0 && !t.dead) {
       t.dead = true;
-      G.particles.blood(t.x, t.y, 8);
+      G.particles.blood(t.x, t.y, t.boss ? 28 : 8);
       G.hive.stats.threatsSlain++;
-      G.hive.score += 20;
-      G.msg(L('m_threatDown', threatNameDef(t.kind)), '#ffe040');
-      Sfx.play('kill');
+      if (t.boss) {
+        G.hive.score += 200;
+        G.msg(L('m_vespaDown'), '#ffe040');
+        Sfx.play('kill'); Sfx.play('task');
+      } else {
+        G.hive.score += 20;
+        G.msg(L('m_threatDown', threatNameDef(t.kind)), '#ffe040');
+        Sfx.play('kill');
+      }
     }
   }
   G.threats = G.threats.filter(t => !t.dead);
@@ -877,8 +883,24 @@ function drawPlay() {
     }
   }
   drawHud();
+  drawBossBar();
   drawTaskAndMsgs();
   if (G.showMap) drawMinimap();
+}
+
+// boss health bar, shown above the HUD whenever a boss is on the field
+function drawBossBar() {
+  let boss = null;
+  for (const t of G.threats) if (t.boss && !t.dead) { boss = t; break; }
+  if (!boss) return;
+  const w = 184, x = (VIEW_W - w) / 2, y = VIEW_H - HUD_H - 10, h = 8;
+  ctx.fillStyle = '#000'; ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
+  ctx.fillStyle = '#3a0e08'; ctx.fillRect(x, y, w, h);
+  const pct = Math.max(0, boss.hp / boss.maxHp);
+  const enr = pct < 0.3;
+  ctx.fillStyle = enr && (G.tick >> 2 & 1) ? '#ff7842' : '#d8301a';
+  ctx.fillRect(x + 1, y + 1, Math.round((w - 2) * pct), h - 2);
+  drawTextCS(ctx, L('boss_name'), VIEW_W / 2, y + 1, '#ffd8b0');
 }
 
 // ---------------------------------------------------------------------------

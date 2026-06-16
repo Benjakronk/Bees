@@ -17,6 +17,11 @@ const INDEX = path.resolve(__dirname, '..', 'index.html');
     for (let i = 0; i < 16000; i++) updatePlay();
     const st = {};
     for (const b of G.bees) if (b.playerIdx < 0 && b.hp > 0) st[b.state] = (st[b.state] || 0) + 1;
+    const store = G.bees.filter(b => b.state === 'store' && b.playerIdx < 0);
+    const storeSample = store.slice(0, 10).map(b => ({
+      inside: b.inside, nectar: Math.round(b.nectar * 10) / 10, pollen: Math.round(b.pollen * 10) / 10,
+      hasTarget: !!b.target, dist: b.target ? Math.round(Math.hypot(b.target.x - b.x, b.target.y - b.y)) : -1,
+    }));
     let builtCells = 0, builtEmpty = 0, buildable = 0, total = Comb.cells.length;
     for (const c of Comb.cells) {
       if (c.built) { builtCells++; if (c.type === 'empty') builtEmpty++; }
@@ -28,6 +33,7 @@ const INDEX = path.resolve(__dirname, '..', 'index.html');
       builtCells, builtEmpty, buildable, total,
       wantBuild: G.hive.wantBuild(), foragingDrive: Math.round(G.hive.foragingDrive() * 100) / 100,
       emptyCellsCached: G.hive.emptyCells, buildableCached: G.hive.buildable,
+      storeSample,
     };
   });
   await browser.close();

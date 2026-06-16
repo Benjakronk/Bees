@@ -18,14 +18,17 @@ const INDEX = path.resolve(__dirname, '..', 'index.html');
 
   const r = await page.evaluate(() => {
     const b = G.players[0].bee, h = Comb.hive;
-    // EXIT: start at the inner waypoint, step the sim, expect to pop outside
+    // EXIT: start at the inner waypoint, step the sim, expect to pop outside.
+    // The player crosses via the animated iris (~20 frames), so allow time.
+    G.players[0].trans = null;
     b.inside = true; b.layerCd = 0; b.x = h.inner.x; b.y = h.inner.y; b.vx = b.vy = 0;
-    for (let i = 0; i < 6 && b.inside; i++) updatePlay();
+    for (let i = 0; i < 30 && b.inside; i++) updatePlay();
     const exited = !b.inside;
 
     // ENTER: place at the entrance hole, step, expect to pop inside
+    G.players[0].trans = null;
     b.layerCd = 0; b.x = h.entrance.x; b.y = h.entrance.y; b.vx = b.vy = 0;
-    for (let i = 0; i < 6 && !b.inside; i++) updatePlay();
+    for (let i = 0; i < 30 && !b.inside; i++) updatePlay();
     const entered = b.inside;
 
     // BUILD: drop onto a buildable cell with honey in stock, hold the action

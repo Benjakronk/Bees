@@ -106,6 +106,9 @@ const STR = {
   m_robber: ['ROBBER BEES! GUARD THE HONEY!', 'RØVERBIER! VOKT HONNINGEN!'],
   m_spider: ['A SPIDER LURKS BY THE DOOR...', 'EN EDDERKOPP LURER VED DØREN...'],
   m_hornet: ['A HORNET! THE BROOD IS IN DANGER!', 'EN GEITHAMS! YNGELEN ER I FARE!'],
+  m_vespa: ['VESPA CRABRO DESCENDS ON THE HIVE!', 'VESPA CRABRO STUPER MOT KUBEN!'],
+  m_vespaDown: ['THE VESPA CRABRO IS SLAIN!', 'VESPA CRABRO ER FELT!'],
+  boss_name: ['VESPA CRABRO', 'VESPA CRABRO'],
   m_sound_label: ['SOUND', 'LYD'],
 
   // tasks (translated from type at draw time -> saves stay language-neutral)
@@ -142,6 +145,7 @@ const THREAT_NAME_DEF = {
   robber: ['THE ROBBER BEE', 'RØVERBIA'],
   spider: ['THE SPIDER', 'EDDERKOPPEN'],
   hornet: ['THE HORNET', 'GEITHAMSEN'],
+  vespa: ['THE VESPA CRABRO', 'VESPA CRABRO'],
 };
 function threatNameDef(k) {
   return (THREAT_NAME_DEF[k] || ['THE ' + String(k).toUpperCase(), String(k).toUpperCase()])[LANG];
