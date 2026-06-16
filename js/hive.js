@@ -83,7 +83,7 @@ class Hive {
     else if (pop > 0) {
       for (const b of G.bees) if (b.hp > 0) b.hp -= 0.006;
       if (this.starveT <= 0) {
-        G.msg('THE HIVE IS STARVING!', '#ff6040'); Sfx.play('starve');
+        G.msg(L('m_starving'), '#ff6040'); Sfx.play('starve');
         this.starveT = 1800;
       }
     }
@@ -163,7 +163,7 @@ class Hive {
     G.bees.push(b);
     this.stats.beesBorn++;
     this.stats.broodRaised++;
-    G.msg('A NEW ' + caste.toUpperCase() + ' EMERGES', caste === 'queen' ? '#ffd040' : '#e8c060');
+    G.msg(L('m_emerges', casteName(caste)), caste === 'queen' ? '#ffd040' : '#e8c060');
     if (G.nearPlayer(c.x, c.y) < 300) Sfx.play('hatch');
   }
 
@@ -178,7 +178,7 @@ class Hive {
         const young = Comb.cells.find(c => c.type === 'larva' && c.age < LARVA_TIME * 0.5);
         if (young) {
           young.queen = true;
-          G.msg('THE COLONY RAISES A NEW QUEEN', '#ffd040');
+          G.msg(L('m_newQueen'), '#ffd040');
         }
       }
       return;
@@ -210,28 +210,28 @@ class Hive {
     if (tasks.filter(t => !t.done).length >= 3) return;
 
     if (this.honeyUnits < WINTER_GOAL * 0.5 && !this.active('gather')) {
-      tasks.push({ type: 'gather', text: 'GATHER NECTAR', n: 0, need: 8, reward: 50 });
-      G.msg('NEW TASK: GATHER NECTAR', '#a0e080');
+      tasks.push({ type: 'gather', n: 0, need: 8, reward: 50 });
+      G.msg(L('m_newTask', L('t_gather')), '#a0e080');
     }
     const hungry = Comb.cells.filter(c => c.type === 'larva' && c.hungry).length;
     if (hungry >= 2 && !this.active('feed')) {
-      tasks.push({ type: 'feed', text: 'FEED THE BROOD', n: 0, need: Math.min(3, hungry), reward: 45 });
-      G.msg('NEW TASK: FEED THE BROOD', '#a0e080');
+      tasks.push({ type: 'feed', n: 0, need: Math.min(3, hungry), reward: 45 });
+      G.msg(L('m_newTask', L('t_feed')), '#a0e080');
     }
     if (this.buildable > 0 && this.emptyCells < 8 && this.honeyUnits > 60 && !this.active('build')) {
-      tasks.push({ type: 'build', text: 'BUILD MORE COMB', n: 0, need: 3, reward: 45 });
-      G.msg('NEW TASK: BUILD MORE COMB', '#a0e080');
+      tasks.push({ type: 'build', n: 0, need: 3, reward: 45 });
+      G.msg(L('m_newTask', L('t_build')), '#a0e080');
     }
     const threat = G.threats.find(t => !t.dead && !t.fleeing &&
       Math.abs(t.x - this.geo.x) < 360);
     if (threat && !this.active('repel')) {
-      tasks.push({ type: 'repel', text: 'REPEL THE ' + threat.kind.toUpperCase(), targetId: threat.id, n: 0, need: 1, reward: 90 });
-      G.msg('NEW TASK: DEFEND THE HIVE!', '#ff8040');
+      tasks.push({ type: 'repel', kind: threat.kind, targetId: threat.id, n: 0, need: 1, reward: 90 });
+      G.msg(L('m_defend'), '#ff8040');
       Sfx.play('alarm');
     }
     if (G.day > this.lastDigTaskDay && this.honeyUnits >= WINTER_GOAL * 0.7 && !this.active('store')) {
       this.lastDigTaskDay = G.day;
-      tasks.push({ type: 'store', text: 'STOCK HONEY FOR WINTER', n: Math.floor(this.honeyUnits), need: WINTER_GOAL, reward: 80, track: true });
+      tasks.push({ type: 'store', n: Math.floor(this.honeyUnits), need: WINTER_GOAL, reward: 80, track: true });
     }
   }
 
@@ -245,7 +245,7 @@ class Hive {
   complete(t) {
     t.done = true; t.doneT = 240;
     this.score += t.reward;
-    G.msg('TASK COMPLETE! +' + t.reward, '#ffe040');
+    G.msg(L('m_taskComplete', t.reward), '#ffe040');
     Sfx.play('task');
   }
 
@@ -270,13 +270,13 @@ class Hive {
     if (!night && count('wasp') < waspCap && day >= 1 && Math.random() < 0.0009) {
       const x = Math.random() < 0.5 ? 40 : WORLD_W - 40;
       G.threats.push(new Threat(x, surfAt(x) - 60, 'wasp'));
-      G.msg('A WASP IS ON THE HUNT!', '#ff8040'); Sfx.play('alarm');
+      G.msg(L('m_wasp'), '#ff8040'); Sfx.play('alarm');
     }
     // robber bees: come when the hive is rich
     if (count('robber') < 3 && day >= 2 && this.honeyUnits > 80 && Math.random() < 0.0007) {
       const x = Math.random() < 0.5 ? 40 : WORLD_W - 40;
       G.threats.push(new Threat(x, surfAt(x) - 50, 'robber'));
-      G.msg('ROBBER BEES! GUARD THE HONEY!', '#ff8040'); Sfx.play('alarm');
+      G.msg(L('m_robber'), '#ff8040'); Sfx.play('alarm');
     }
     // spider: spins a web near the entrance
     if (count('spider') < 1 && day >= 2 && Math.random() < 0.0003) {
@@ -284,13 +284,13 @@ class Hive {
       const ax = h.outer.x + h.entSide * (10 + Math.random() * 20);
       const ay = h.entrance.y - 30 - Math.random() * 20;
       G.threats.push(new Threat(ax, ay, 'spider'));
-      G.msg('A SPIDER LURKS BY THE DOOR...', '#ff8040');
+      G.msg(L('m_spider'), '#ff8040');
     }
     // hornet: rare heavyweight that raids the brood
     if (count('hornet') < 1 && day >= 4 && Math.random() < 0.00018) {
       const x = Math.random() < 0.5 ? 40 : WORLD_W - 40;
       G.threats.push(new Threat(x, surfAt(x) - 70, 'hornet'));
-      G.msg('A HORNET! THE BROOD IS IN DANGER!', '#ff5030'); Sfx.play('alarm');
+      G.msg(L('m_hornet'), '#ff5030'); Sfx.play('alarm');
     }
   }
 }

@@ -130,7 +130,9 @@ class Bee {
     this.wing += 0.9;
     this.phase += 0.1 + Math.hypot(this.vx, this.vy) * 0.05;
 
-    if (this.playerIdx >= 0) { flyStep(this); crossDoor(this); return; }
+    // player bees cross the knothole via the animated iris transition, driven
+    // from updatePlay (see updateHiveTransition); NPCs snap through instantly
+    if (this.playerIdx >= 0) { flyStep(this); return; }
     this.npcThink();
     flyStep(this);
     crossDoor(this);

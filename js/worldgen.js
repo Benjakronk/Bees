@@ -173,15 +173,19 @@ function genWorld(seed) {
   // carve the cavity (rounded rectangle) back to air
   carveRoundRect(m, cavX0, cavY0, cavX1, cavY1, 22);
 
-  // the knothole entrance: a short tunnel through one trunk wall near the floor
+  // the knothole entrance: a short tunnel through one trunk wall near the floor.
+  // It must sit ON the bark, so derive the trunk's real half-width at this
+  // height (the trunk barrels out near the base) and place the hole just inside
+  // that surface -- otherwise the knothole floats out in the air beside the trunk.
   const entSide = rng() < 0.5 ? -1 : 1;
   const entY = cavY1 - 46;
   const innerX = treeX + entSide * (CW / 2 - 6);
-  const outerX = treeX + entSide * (trunkHalf + 14);
+  const trunkHwAtEnt = trunkHalf + Math.max(0, (entY - (groundY - 120)) / 140) * 10;
+  const outerX = treeX + entSide * (trunkHwAtEnt - 6);
   carveTunnel(m, innerX, entY, outerX, entY, 9);
-  // a little landing lip just outside the hole
-  for (let x = treeX + entSide * (trunkHalf + 6); ; x += entSide) {
-    if (entSide > 0 ? x > outerX + 8 : x < outerX - 8) break;
+  // a little landing lip jutting out below the hole
+  for (let s = 0; s <= 12; s++) {
+    const x = Math.round(outerX + entSide * s);
     setPx(m, x, entY + 11, M_WOOD); setPx(m, x, entY + 12, M_WOOD);
   }
 

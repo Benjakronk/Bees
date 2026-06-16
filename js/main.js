@@ -5,8 +5,8 @@ const VIEW_W = 320, VIEW_H = 200, HUD_H = 24;
 
 // key bindings per player (KeyboardEvent.code)
 const BIND = [
-  { up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', sting: 'Space', act: 'KeyE' },
-  { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', sting: 'Period', act: 'Comma' },
+  { up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', sting: 'Space', act: 'KeyE', swap: 'Tab' },
+  { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', sting: 'Period', act: 'Comma', swap: 'KeyL' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -20,6 +20,7 @@ const G = {
   tick: 0,
   playerCount: 1,
   players: [],
+  splitVert: (() => { try { return localStorage.getItem('bier_split') === 'v'; } catch (e) { return false; } })(),
   bees: [], flowers: [], threats: [],
   hg: null,           // hive geometry
   hive: null,         // Hive simulation
@@ -197,11 +198,13 @@ function newWorld(slot, playerCount) {
 
   for (const f of world.flowers) G.flowers.push(new Flower(f.x, f.y, f.kind));
 
-  // player bees, just inside the hive by the door
+  // player bees start in the comb, a little in from the door (not on the gate,
+  // which would trigger a transition on frame one)
   G.players = [];
+  const di = world.hive.dropIn;
   for (let p = 0; p < playerCount; p++) {
-    const b = new Bee(world.hive.inner.x + (p ? 10 : -2), world.hive.inner.y - 4, 'worker');
-    b.playerIdx = p;
+    const b = new Bee(di.x, di.y - 4 + p * 8, 'worker');
+    b.playerIdx = p; b.layerCd = 24;
     G.bees.push(b);
     G.players.push({ bee: b, cam: { x: b.x - VIEW_W / 2, y: b.y - 60 } });
   }
@@ -283,9 +286,13 @@ function controlPlayer(pIdx) {
   const p = G.players[pIdx];
   const b = p.bee;
   if (!b || b.hp <= 0) return;
+  if (p.trans) { if (pIdx === 0) Sfx.setBuzz(0); return; }   // frozen mid-knothole
   const k = BIND[pIdx];
   const c = b.def;
   const cap = CAP[b.caste];
+
+  // hand control to another bee in the colony (cancellable live switch)
+  if (tookPress(k.swap)) { startSwitch(pIdx); return; }
 
   let dx = (keys[k.right] ? 1 : 0) - (keys[k.left] ? 1 : 0);
   let dy = (keys[k.down] ? 1 : 0) - (keys[k.up] ? 1 : 0);
@@ -349,14 +356,14 @@ function controlPlayer(pIdx) {
             b.nectar = Math.max(0, b.nectar - 0.5);
             b.feedCd = 20;
             Hv.progress('feed', 1);
-            G.msg('FED THE BROOD'); Sfx.play('sip');
+            G.msg(L('m_fed')); Sfx.play('sip');
             G.particles.sparkle(cell.x, cell.y, 2);
           }
         } else if (cap.canLay && cell.type === 'empty' && cell.zone === 'brood' && Hv.honeyUnits >= 6) {
           // a player queen lays an egg
           if ((b.feedCd | 0) <= 0) {
             cell.type = 'egg'; cell.age = 0; Comb.drainHoney(1.5); b.feedCd = 40;
-            G.msg('LAID AN EGG'); Sfx.play('lay'); G.particles.sparkle(cell.x, cell.y, 2);
+            G.msg(L('m_laid')); Sfx.play('lay'); G.particles.sparkle(cell.x, cell.y, 2);
           }
         } else if (b.nectar > 0.3 && (cell.type === 'empty' || cell.type === 'honey' || cell.type === 'nectar') && !cell.capped && cell.zone !== 'brood') {
           const give = Math.min(1 - cell.amount, b.nectar / HONEY_PER_CELL, 0.06);
@@ -386,7 +393,7 @@ function controlPlayer(pIdx) {
             b.buildT = 0;
             Comb.buildCell(spot); Comb.drainHoney(3);
             Hv.progress('build', 1);
-            G.msg('BUILT NEW COMB'); Sfx.play('deposit');
+            G.msg(L('m_built')); Sfx.play('deposit');
             G.particles.sparkle(spot.x, spot.y, 3);
           }
         }
@@ -407,6 +414,7 @@ function updatePlay() {
   if (!G.players.some(p => p.bee && p.bee.hp > 0 && p.bee.playerIdx === 0)) Sfx.setBuzz(0);
 
   for (const b of G.bees) if (b.hp > 0) b.update();
+  for (const p of G.players) updateHiveTransition(p);
 
   // bee deaths
   for (const b of G.bees) {
@@ -416,11 +424,11 @@ function updatePlay() {
       G.hive.stats.beesLost++;
       if (b.playerIdx >= 0) {
         Sfx.play('die');
-        G.msg(G.playerCount > 1 ? 'PLAYER ' + (b.playerIdx + 1) + ' FELL!' : 'YOUR BEE FELL!', '#ff5040');
+        G.msg(G.playerCount > 1 ? L('m_pFell', b.playerIdx + 1) : L('m_youFell'), '#ff5040');
         G.deadQueue.push(b.playerIdx);
         G.players[b.playerIdx].bee = null;
       } else if (b.caste === 'queen') {
-        G.msg('THE QUEEN HAS FALLEN!', '#ff4030'); Sfx.play('alarm');
+        G.msg(L('m_queenFell'), '#ff4030'); Sfx.play('alarm');
       } else if (G.nearPlayer(b.x, b.y) < 280) {
         Sfx.play('kill');
       }
@@ -436,7 +444,7 @@ function updatePlay() {
       G.particles.blood(t.x, t.y, 8);
       G.hive.stats.threatsSlain++;
       G.hive.score += 20;
-      G.msg('THE ' + t.kind.toUpperCase() + ' IS DOWN!', '#ffe040');
+      G.msg(L('m_threatDown', threatNameDef(t.kind)), '#ffe040');
       Sfx.play('kill');
     }
   }
@@ -452,7 +460,7 @@ function updatePlay() {
   // day rollover
   if (G.day !== prevDay) {
     const s = G.hive.season();
-    G.msg('DAY ' + (G.day + 1) + ' - ' + s.name, '#ffd060');
+    G.msg(L('m_dayN', G.day + 1, seasonName(s.name)), '#ffd060');
   }
 
   updateCameras();
@@ -460,12 +468,12 @@ function updatePlay() {
   // takeover queue
   if (G.deadQueue.length > 0 && !G.takeover) {
     const pIdx = G.deadQueue[0];
-    const candidates = G.bees
-      .filter(b => b.hp > 0 && b.playerIdx < 0)
+    const candidates = controllableBees()
       .sort((x, y) => (x.caste === 'queen' ? 1 : 0) - (y.caste === 'queen' ? 1 : 0))
       .slice(0, 6);
     if (candidates.length === 0) { endWorld(); return; }
     G.takeover = { pIdx, list: candidates, sel: 0 };
+    G.menuSel = 0;
     G.state = 'dead';
   }
 
@@ -474,17 +482,31 @@ function updatePlay() {
   G.autosaveT--;
   if (G.autosaveT <= 0) {
     G.autosaveT = 7200;
-    if (saveWorld(G.slot)) { G.msg('HIVE SAVED', '#80c0ff'); Sfx.play('save'); }
+    if (saveWorld(G.slot)) { G.msg(L('m_saved'), '#80c0ff'); Sfx.play('save'); }
   }
 
   if (tookPress('KeyM')) G.showMap = !G.showMap;
   if (tookPress('Escape') || tookPress('KeyP')) { G.state = 'pause'; G.menuSel = 0; Sfx.play('menu'); Sfx.setBuzz(0); }
 }
 
+// the on-screen rectangle a given player's view occupies. 1P fills the play
+// area; 2P splits it horizontally (stacked) or vertically (side by side).
+function playerView(i) {
+  const fullH = VIEW_H - HUD_H;
+  if (G.playerCount === 1) return { vx: 0, vy: 0, vw: VIEW_W, vh: fullH };
+  if (G.splitVert) {
+    const vw = (VIEW_W - 2) / 2;
+    return { vx: i === 0 ? 0 : vw + 2, vy: 0, vw, vh: fullH };
+  }
+  const vh = (fullH - 2) / 2;
+  return { vx: 0, vy: i === 0 ? 0 : vh + 2, vw: VIEW_W, vh };
+}
+
 function updateCameras() {
-  for (const p of G.players) {
+  for (let i = 0; i < G.players.length; i++) {
+    const p = G.players[i];
     if (!p.bee) continue;
-    const vh = G.playerCount > 1 ? (VIEW_H - HUD_H) / 2 : VIEW_H - HUD_H;
+    const v = playerView(i);
     if (p.fx === undefined || Math.abs(p.bee.x - p.fx) > 140 || Math.abs(p.bee.y - p.fy) > 140) {
       p.fx = p.bee.x; p.fy = p.bee.y; p.look = p.bee.dir * 26;
     }
@@ -494,12 +516,53 @@ function updateCameras() {
     if (p.bee.y > p.fy + DZY) p.fy = p.bee.y - DZY;
     else if (p.bee.y < p.fy - DZY) p.fy = p.bee.y + DZY;
     p.look += (p.bee.dir * 26 - p.look) * 0.03;
-    const tx = p.fx - VIEW_W / 2 + p.look;
-    const ty = p.fy - vh / 2 - 6;
+    const tx = p.fx - v.vw / 2 + p.look;
+    const ty = p.fy - v.vh / 2 - 6;
     p.cam.x += (tx - p.cam.x) * 0.1;
     p.cam.y += (ty - p.cam.y) * 0.1;
-    p.cam.x = Math.max(0, Math.min(WORLD_W - VIEW_W, p.cam.x));
-    p.cam.y = Math.max(0, Math.min(WORLD_H - vh, p.cam.y));
+    p.cam.x = Math.max(0, Math.min(WORLD_W - v.vw, p.cam.x));
+    p.cam.y = Math.max(0, Math.min(WORLD_H - v.vh, p.cam.y));
+  }
+}
+
+// Player hive entry/exit, animated as an iris wipe through the knothole.
+// While p.trans is set the bee is frozen and an iris overlay (drawIris) plays:
+// it irises closed on the hole the bee dives into, the layer swaps at the
+// pinch point, then irises open around where the bee lands on the far side.
+const DOOR_R2 = 121;          // (11px)^2 trigger radius, matching crossDoor
+const TRANS_DUR = 10;         // frames per half (close / open)
+
+function updateHiveTransition(p) {
+  const b = p.bee;
+  if (!b) { p.trans = null; return; }
+  const h = Comb.hive;
+  const tr = p.trans;
+
+  if (tr) {
+    tr.t++;
+    if (tr.phase === 'close') {
+      // draw the bee into the knothole as the iris closes
+      b.x += (tr.cx - b.x) * 0.34; b.y += (tr.cy - b.y) * 0.34;
+      b.vx *= 0.6; b.vy *= 0.6;
+      if (tr.t >= TRANS_DUR) {
+        b.inside = tr.toInside;
+        const drop = tr.toInside ? h.dropIn : h.dropOut;
+        b.x = drop.x; b.y = drop.y; b.vx *= 0.3; b.vy *= 0.3;
+        tr.phase = 'open'; tr.t = 0; tr.cx = drop.x; tr.cy = drop.y;
+      }
+    } else if (tr.t >= TRANS_DUR) {
+      p.trans = null; b.layerCd = 18;
+    }
+    return;
+  }
+
+  if (b.layerCd > 0) { b.layerCd--; return; }
+  if (!b.inside && dist2(b.x, b.y, h.entrance.x, h.entrance.y) < DOOR_R2) {
+    p.trans = { phase: 'close', t: 0, toInside: true, cx: h.entrance.x, cy: h.entrance.y };
+    Sfx.play('menu');
+  } else if (b.inside && dist2(b.x, b.y, h.inner.x, h.inner.y) < DOOR_R2) {
+    p.trans = { phase: 'close', t: 0, toInside: false, cx: h.inner.x, cy: h.inner.y };
+    Sfx.play('menu');
   }
 }
 
@@ -510,6 +573,25 @@ function endWorld() {
   G.state = 'gameover';
   Sfx.setBuzz(0);
   Sfx.play('die');
+}
+
+// bees the player may take over / switch to (any living NPC bee)
+function controllableBees() {
+  return G.bees.filter(b => b.hp > 0 && b.playerIdx < 0);
+}
+
+// open the bee-select overlay as a cancellable live switch for player pIdx
+function startSwitch(pIdx) {
+  const cur = G.players[pIdx].bee;
+  if (!cur) return;
+  const list = controllableBees()
+    .sort((a, b) => dist2(a.x, a.y, cur.x, cur.y) - dist2(b.x, b.y, cur.x, cur.y))
+    .slice(0, 6);
+  if (list.length === 0) { G.msg(L('m_noSwitch'), '#ff8040'); Sfx.play('menu'); return; }
+  G.takeover = { pIdx, list, sel: 0, prevBee: cur };
+  G.menuSel = 0;
+  G.state = 'dead';
+  Sfx.play('menu');
 }
 
 // ---------------------------------------------------------------------------
@@ -555,8 +637,27 @@ function drawViewport(p, vx, vy, vw, vh) {
   if (viewInside) drawInside(p, camx, camy, vw, vh, tod);
   else drawOutside(p, camx, camy, vw, vh, tod);
 
+  if (p.trans) drawIris(p, camx, camy, vw, vh);
+
   ctx.restore();
 }
+
+// the knothole iris: black everywhere but a shrinking/growing circle on the
+// door, punched out of the fill with a reverse-wound arc
+function drawIris(p, camx, camy, vw, vh) {
+  const tr = p.trans;
+  const maxR = Math.hypot(vw, vh) * 0.62;
+  const f = Math.max(0, Math.min(1, tr.t / TRANS_DUR));
+  const R = tr.phase === 'close' ? maxR * (1 - f) : maxR * f;
+  const sx = Math.round(tr.cx - camx), sy = Math.round(tr.cy - camy);
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.rect(0, 0, vw, vh);
+  if (R > 0.5) ctx.arc(sx, sy, R, 0, Math.PI * 2, true);
+  ctx.fill();
+}
+
+let _knotholeGrad = null;
 
 // the hive interior: a cutaway of the comb behind a dark wall of wood
 function drawInside(p, camx, camy, vw, vh, tod) {
@@ -566,12 +667,18 @@ function drawInside(p, camx, camy, vw, vh, tod) {
   ctx.drawImage(T.terCan, camx, camy, vw, vh, 0, 0, vw, vh);
   // the comb
   Comb.draw(ctx, camx, camy, vw, vh);
-  // daylight spilling in through the knothole
+  // daylight spilling in through the knothole (gradient cached, just translated)
   const e = Comb.hive.inner, ex = Math.round(e.x - camx), ey = Math.round(e.y - camy);
   if (!G.isNight()) {
-    const g = ctx.createRadialGradient(ex, ey, 2, ex, ey, 30);
-    g.addColorStop(0, 'rgba(255,238,180,0.5)'); g.addColorStop(1, 'rgba(255,238,180,0)');
-    ctx.fillStyle = g; ctx.fillRect(ex - 30, ey - 30, 60, 60);
+    if (!_knotholeGrad) {
+      _knotholeGrad = ctx.createRadialGradient(0, 0, 2, 0, 0, 30);
+      _knotholeGrad.addColorStop(0, 'rgba(255,238,180,0.5)'); _knotholeGrad.addColorStop(1, 'rgba(255,238,180,0)');
+    }
+    ctx.save();
+    ctx.translate(ex, ey);
+    ctx.fillStyle = _knotholeGrad;
+    ctx.fillRect(-30, -30, 60, 60);
+    ctx.restore();
   }
   // entities on the inside layer
   for (const t of G.threats) if (t.inside && !t.dead) t.draw(ctx, camx, camy);
@@ -636,6 +743,23 @@ function drawOutside(p, camx, camy, vw, vh, tod) {
   drawGloom(p, camx, camy, vw, vh, tod, false);
 }
 
+// the darkness vignette around the player. The gradient shape depends only on
+// (tint, amb), so cache one centred at the origin and translate it onto the
+// player each frame instead of re-allocating a radial gradient per frame.
+const _gloomCache = {};
+function gloomGrad(tint, amb) {
+  const key = tint + '|' + amb.toFixed(2);
+  let g = _gloomCache[key];
+  if (!g) {
+    g = ctx.createRadialGradient(0, 0, 16, 0, 0, 95);
+    g.addColorStop(0, `rgba(${tint},0)`);
+    g.addColorStop(0.7, `rgba(${tint},${amb * 0.5})`);
+    g.addColorStop(1, `rgba(${tint},${amb})`);
+    _gloomCache[key] = g;
+  }
+  return g;
+}
+
 function drawGloom(p, camx, camy, vw, vh, tod, inHive) {
   if (!p.bee) return;
   let amb = 0;
@@ -645,12 +769,12 @@ function drawGloom(p, camx, camy, vw, vh, tod, inHive) {
   if (amb <= 0.03) return;
   const px = Math.round(p.bee.x - camx), py = Math.round(p.bee.y - camy);
   const tint = inHive ? '12,7,2' : '4,5,14';
-  const grad = ctx.createRadialGradient(px, py, 16, px, py, 95);
-  grad.addColorStop(0, `rgba(${tint},0)`);
-  grad.addColorStop(0.7, `rgba(${tint},${amb * 0.5})`);
-  grad.addColorStop(1, `rgba(${tint},${amb})`);
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, vw, vh);
+  // quantise amb so the cache stays tiny (dusk fades smoothly enough at 0.02 steps)
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.fillStyle = gloomGrad(tint, Math.round(amb * 50) / 50);
+  ctx.fillRect(-px, -py, vw, vh);
+  ctx.restore();
 }
 
 function bevelPanel(x, y, w, h) {
@@ -688,8 +812,8 @@ function drawHud() {
       drawHpBar(px + 14, y + 4, 40, Math.max(0, p.bee.hp / p.bee.maxHp));
       drawLoadBar(px + 14, y + 11, 40, p.bee.nectar / p.bee.def.nectarCap, '#e8b830');
       drawLoadBar(px + 14, y + 15, 40, p.bee.def.pollenCap ? p.bee.pollen / p.bee.def.pollenCap : 0, '#e07828');
-      drawText(ctx, p.bee.caste, px + 14, y + 18, '#b0a080');
-    } else { drawText(ctx, 'DOWN', px + 14, y + 5, '#e03020'); }
+      drawText(ctx, casteName(p.bee.caste), px + 14, y + 18, '#b0a080');
+    } else { drawText(ctx, L('w_down'), px + 14, y + 5, '#e03020'); }
   }
 
   const cx = VIEW_W / 2;
@@ -697,14 +821,14 @@ function drawHud() {
   drawText(ctx, '\x02' + bees, cx - 58, y + 4, '#e8c060');
   drawText(ctx, '\x01' + Math.floor(Hv.honeyUnits), cx - 26, y + 4, '#e8b830');
   drawText(ctx, '\x03' + Math.floor(Hv.pollenUnits), cx + 14, y + 4, '#e08828');
-  drawText(ctx, (G.isNight() ? '\x05' : '\x04') + (Hv.season().name) + ' D' + (G.day + 1), cx - 58, y + 14, '#c0c0d8');
-  drawText(ctx, 'SCORE ' + Hv.score, cx + 6, y + 14, '#a0c8a0');
+  drawText(ctx, (G.isNight() ? '\x05' : '\x04') + seasonName(Hv.season().name) + ' D' + (G.day + 1), cx - 58, y + 14, '#c0c0d8');
+  drawText(ctx, L('ui_score', Hv.score), cx + 6, y + 14, '#a0c8a0');
 }
 
 function drawTaskAndMsgs() {
   const t = G.hive.tasks.find(t => !t.done) || G.hive.tasks.find(t => t.done && t.doneT > 0);
   if (t) {
-    let str = t.done ? t.text + ' - DONE!' : t.text + ' ' + Math.floor(t.n) + '/' + t.need;
+    let str = t.done ? taskText(t) + ' - ' + L('w_done') : taskText(t) + ' ' + Math.floor(t.n) + '/' + t.need;
     const blink = t.done && (G.tick >> 3) % 2;
     if (!blink) drawTextS(ctx, str, 4, 3, t.done ? '#ffe040' : '#a8e8a0');
   }
@@ -737,17 +861,20 @@ function drawMinimap() {
   }
   ctx.fillStyle = '#ff3020';
   for (const t of G.threats) ctx.fillRect(mx + t.x * sx - 1, my + t.y * sy - 1, 2, 2);
-  drawTextC(ctx, 'M: CLOSE MAP', VIEW_W / 2, my + mh + 8, '#a09070');
+  drawTextC(ctx, L('ui_closeMap'), VIEW_W / 2, my + mh + 8, '#a09070');
 }
 
 function drawPlay() {
   if (G.playerCount === 1) {
     drawViewport(G.players[0], 0, 0, VIEW_W, VIEW_H - HUD_H);
   } else {
-    const vh = (VIEW_H - HUD_H - 2) / 2;
-    drawViewport(G.players[0], 0, 0, VIEW_W, vh);
-    ctx.fillStyle = '#000'; ctx.fillRect(0, vh, VIEW_W, 2);
-    drawViewport(G.players[1], 0, vh + 2, VIEW_W, vh);
+    ctx.fillStyle = '#000';
+    if (G.splitVert) ctx.fillRect((VIEW_W - 2) / 2, 0, 2, VIEW_H - HUD_H);
+    else ctx.fillRect(0, (VIEW_H - HUD_H - 2) / 2, VIEW_W, 2);
+    for (let i = 0; i < 2; i++) {
+      const v = playerView(i);
+      drawViewport(G.players[i], v.vx, v.vy, v.vw, v.vh);
+    }
   }
   drawHud();
   drawTaskAndMsgs();
@@ -794,35 +921,37 @@ function drawTitle() {
   drawTextC(ctx, 'BIER', VIEW_W / 2 + 3, ly + 3, '#3a2206', 7);
   drawTextC(ctx, 'BIER', VIEW_W / 2, ly, '#e8a820', 7);
   drawTextC(ctx, 'BIER', VIEW_W / 2 - 1, ly - 1, '#ffd860', 7);
-  drawTextCS(ctx, 'A HIVE UNDER YOUR WING', VIEW_W / 2, ly + 56, '#c8a868');
+  drawTextCS(ctx, L('ui_tagline'), VIEW_W / 2, ly + 56, '#c8a868');
 
-  const items = ['START GAME', 'HELP',
-    'SOUND: ' + (Sfx.muted ? 'OFF' : 'ON'),
-    'CRT: ' + (document.getElementById('crt').classList.contains('off') ? 'OFF' : 'ON')];
-  const my = 122;
+  const items = [L('ui_start'), L('ui_help'),
+    L('ui_sound', L(Sfx.muted ? 'w_off' : 'w_on')),
+    L('ui_crt', L(document.getElementById('crt').classList.contains('off') ? 'w_off' : 'w_on')),
+    L('ui_lang')];
+  const my = 118;
   for (let i = 0; i < items.length; i++) {
     const sel = i === G.menuSel;
     if (sel) drawTextC(ctx, '\x06', VIEW_W / 2 - textWidth(items[i]) / 2 - 12, my + i * 12, '#ffe040');
     drawTextCS(ctx, items[i], VIEW_W / 2, my + i * 12, sel ? '#ffe040' : '#c8b890');
   }
-  drawTextC(ctx, '(C) 1998 BENSOFT INTERACTIVE', VIEW_W / 2, VIEW_H - 12, '#6a5430');
+  drawTextC(ctx, L('ui_copyright'), VIEW_W / 2, VIEW_H - 12, '#6a5430');
 }
 
 function updateTitle() {
-  if (menuNav(4)) {
+  if (menuNav(5)) {
     Sfx.play('select');
     switch (G.menuSel) {
       case 0: G.state = 'slots'; G.slotSel = 0; G.eraseArm = -1; break;
       case 1: G.prevState = 'title'; G.state = 'help'; break;
       case 2: Sfx.toggleMute(); break;
       case 3: document.getElementById('crt').classList.toggle('off'); break;
+      case 4: setLang(LANG === 0); break;
     }
   }
 }
 
 function drawSlots() {
   ctx.fillStyle = '#170f06'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  drawTextCS(ctx, 'CHOOSE A HIVE', VIEW_W / 2, 18, '#e8a820', 2);
+  drawTextCS(ctx, L('ui_choose'), VIEW_W / 2, 18, '#e8a820', 2);
   for (let i = 0; i < 3; i++) {
     const info = slotInfo(i + 1);
     const sy = 52 + i * 34;
@@ -834,14 +963,14 @@ function drawSlots() {
       ctx.fillRect(40, sy - 4, 1, 28); ctx.fillRect(279, sy - 4, 1, 28);
       drawText(ctx, '\x06', 28, sy + 5, '#ffe040');
     }
-    drawText(ctx, 'HIVE ' + (i + 1), 48, sy, sel ? '#ffe040' : '#c8b890');
+    drawText(ctx, L('ui_hive', i + 1), 48, sy, sel ? '#ffe040' : '#c8b890');
     if (info) {
-      drawText(ctx, 'DAY ' + (info.day + 1) + '  \x02' + info.bees + '  \x01' + info.honey + '  SCORE ' + info.score, 48, sy + 10, '#a09070');
-      if (G.eraseArm === i) drawText(ctx, 'X AGAIN TO ERASE!', 180, sy, '#ff5040');
-    } else { drawText(ctx, 'EMPTY - A NEW SWARM AWAITS', 48, sy + 10, '#706050'); }
+      drawText(ctx, L('w_day') + ' ' + (info.day + 1) + '  \x02' + info.bees + '  \x01' + info.honey + '  ' + L('ui_score', info.score), 48, sy + 10, '#a09070');
+      if (G.eraseArm === i) drawText(ctx, L('ui_eraseArm'), 180, sy, '#ff5040');
+    } else { drawText(ctx, L('ui_empty'), 48, sy + 10, '#706050'); }
   }
-  drawTextC(ctx, 'ENTER: 1 PLAYER    T: 2 PLAYERS', VIEW_W / 2, 164, '#b0a080');
-  drawTextC(ctx, 'X: ERASE    ESC: BACK', VIEW_W / 2, 176, '#706050');
+  drawTextC(ctx, L('ui_slotKeys'), VIEW_W / 2, 164, '#b0a080');
+  drawTextC(ctx, L('ui_slotKeys2'), VIEW_W / 2, 176, '#706050');
 }
 
 function updateSlots() {
@@ -858,93 +987,81 @@ function updateSlots() {
   if (pc) {
     Sfx.play('select');
     const slot = G.slotSel + 1;
-    if (slotInfo(slot) && loadWorld(slot, pc)) { G.state = 'play'; G.msg('WELCOME BACK TO THE HIVE'); }
+    if (slotInfo(slot) && loadWorld(slot, pc)) { G.state = 'play'; G.msg(L('m_welcome')); }
     else { newWorld(slot, pc); G.state = 'intro'; G.introLine = 0; }
   }
 }
 
-const INTRO_TEXT = [
-  'HIGH SUMMER. THE MEADOW HUMS.',
-  '',
-  'INSIDE A GREAT HOLLOW OAK,',
-  'A COLONY OF BEES TENDS ITS COMB:',
-  'GOLDEN HONEY, AMBER POLLEN,',
-  'AND A NURSERY OF PALE GRUBS.',
-  '',
-  'YOU ARE ONE WORKER AMONG THOUSANDS.',
-  '',
-  'FORAGE THE FLOWERS. FILL THE COMB.',
-  'FEED THE BROOD. STING THE WASPS.',
-  '',
-  'STOCK ENOUGH HONEY,',
-  'AND THE HIVE WILL SURVIVE THE WINTER.',
-];
-
 function drawIntro() {
   ctx.fillStyle = '#170f06'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  const lines = introText();
   G.introLine += 0.4;
-  const shown = Math.min(INTRO_TEXT.length, Math.floor(G.introLine / 6) + 1);
+  const shown = Math.min(lines.length, Math.floor(G.introLine / 6) + 1);
   let y = 24;
   for (let i = 0; i < shown; i++) {
-    drawTextC(ctx, INTRO_TEXT[i], VIEW_W / 2, y, i >= INTRO_TEXT.length - 2 ? '#e8a820' : '#c8b890');
+    drawTextC(ctx, lines[i], VIEW_W / 2, y, i >= lines.length - 2 ? '#e8a820' : '#c8b890');
     y += 11;
   }
-  if (shown >= INTRO_TEXT.length && (G.tick >> 4) % 2 === 0) drawTextC(ctx, 'PRESS SPACE', VIEW_W / 2, 188, '#ffe040');
+  if (shown >= lines.length && (G.tick >> 4) % 2 === 0) drawTextC(ctx, L('ui_pressSpace'), VIEW_W / 2, 188, '#ffe040');
   G.tick++;
 }
 
 function updateIntro() {
-  if (tookPress('Space') || tookPress('Enter')) { G.state = 'play'; G.msg('FLY OUT AND GATHER NECTAR', '#a0e080'); Sfx.play('select'); }
+  if (tookPress('Space') || tookPress('Enter')) { G.state = 'play'; G.msg(L('m_flyOut'), '#a0e080'); Sfx.play('select'); }
 }
-
-const HELP_TEXT = [
-  ['PLAYER 1', '#ffe080'],
-  ['  W A S D ....... FLY', '#c8b890'],
-  ['  SPACE ......... STING', '#c8b890'],
-  ['  E ............. GATHER / DEPOSIT / FEED', '#c8b890'],
-  ['PLAYER 2', '#80d0ff'],
-  ['  ARROWS ........ FLY     . STING     , ACT', '#c8b890'],
-  ['', ''],
-  ['HOLD E AT A FLOWER TO FILL UP ON NECTAR', '#a8e8a0'],
-  ['& POLLEN. HOLD E AT A COMB CELL TO STORE.', '#a8e8a0'],
-  ['HOLD E AT A HUNGRY GRUB ( ! ) TO FEED IT.', '#a8e8a0'],
-  ['M: MAP    ESC: PAUSE', '#a09070'],
-];
 
 function drawHelp() {
   ctx.fillStyle = '#170f06'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  drawTextCS(ctx, 'HOW TO BEE', VIEW_W / 2, 12, '#e8a820', 2);
+  drawTextCS(ctx, L('ui_howto'), VIEW_W / 2, 12, '#e8a820', 2);
   let y = 38;
-  for (const [line, color] of HELP_TEXT) { if (line) drawText(ctx, line, 18, y, color); y += 12; }
-  drawTextC(ctx, 'ESC: BACK', VIEW_W / 2, 188, '#706050');
+  for (const [line, color] of helpText()) { if (line) drawText(ctx, line, 18, y, color); y += 12; }
+  drawTextC(ctx, L('ui_escBack'), VIEW_W / 2, 188, '#706050');
 }
 
 function updateHelp() {
   if (tookPress('Escape') || tookPress('Enter') || tookPress('Space')) { G.state = G.prevState === 'pause' ? 'pause' : G.prevState; Sfx.play('menu'); }
 }
 
+// pause-menu items -- the SPLIT orientation toggle only appears in 2-player
+function pauseItems() {
+  const items = [
+    { id: 'resume', label: L('ui_resume') },
+    { id: 'save', label: L('ui_saveGame') },
+    { id: 'help', label: L('ui_help') },
+  ];
+  if (G.playerCount > 1) items.push({ id: 'split', label: L('ui_split', L(G.splitVert ? 'ui_vert' : 'ui_horiz')) });
+  items.push({ id: 'quit', label: L('ui_saveQuit') });
+  return items;
+}
+
 function drawPause() {
   drawPlay();
   ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  bevelPanel(100, 56, 120, 88);
-  drawTextCS(ctx, 'PAUSED', VIEW_W / 2, 64, '#e8a820', 2);
-  const items = ['RESUME', 'SAVE GAME', 'HELP', 'SAVE + QUIT'];
+  const items = pauseItems();
+  bevelPanel(96, 56, 128, 40 + items.length * 12);
+  drawTextCS(ctx, L('ui_paused'), VIEW_W / 2, 64, '#e8a820', 2);
   for (let i = 0; i < items.length; i++) {
     const sel = i === G.menuSel;
-    if (sel) drawText(ctx, '\x06', 110, 88 + i * 12, '#ffe040');
-    drawText(ctx, items[i], 122, 88 + i * 12, sel ? '#ffe040' : '#c8b890');
+    if (sel) drawText(ctx, '\x06', 106, 88 + i * 12, '#ffe040');
+    drawText(ctx, items[i].label, 118, 88 + i * 12, sel ? '#ffe040' : '#c8b890');
   }
 }
 
 function updatePause() {
   if (tookPress('Escape')) { G.state = 'play'; return; }
-  if (menuNav(4)) {
+  const items = pauseItems();
+  if (G.menuSel >= items.length) G.menuSel = items.length - 1;
+  if (menuNav(items.length)) {
     Sfx.play('select');
-    switch (G.menuSel) {
-      case 0: G.state = 'play'; break;
-      case 1: if (saveWorld(G.slot)) { G.msg('HIVE SAVED', '#80c0ff'); Sfx.play('save'); } G.state = 'play'; break;
-      case 2: G.prevState = 'pause'; G.state = 'help'; break;
-      case 3: saveWorld(G.slot); G.running = false; G.state = 'title'; G.menuSel = 0; break;
+    switch (items[G.menuSel].id) {
+      case 'resume': G.state = 'play'; break;
+      case 'save': if (saveWorld(G.slot)) { G.msg(L('m_saved'), '#80c0ff'); Sfx.play('save'); } G.state = 'play'; break;
+      case 'help': G.prevState = 'pause'; G.state = 'help'; break;
+      case 'split':
+        G.splitVert = !G.splitVert;
+        try { localStorage.setItem('bier_split', G.splitVert ? 'v' : 'h'); } catch (e) {}
+        break;
+      case 'quit': saveWorld(G.slot); G.running = false; G.state = 'title'; G.menuSel = 0; break;
     }
   }
 }
@@ -954,36 +1071,52 @@ function drawDead() {
   ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   const tk = G.takeover;
   if (!tk) return;
+  const sw = !!tk.prevBee;            // live switch vs death takeover
   bevelPanel(70, 30, 180, 140);
   const pcol = tk.pIdx === 0 ? '#ffe080' : '#80d0ff';
-  drawTextCS(ctx, (G.playerCount > 1 ? 'PLAYER ' + (tk.pIdx + 1) + ' ' : '') + 'BEE LOST', VIEW_W / 2, 38, '#ff5040', 2);
-  drawTextC(ctx, 'THE HIVE LIVES ON.', VIEW_W / 2, 58, '#c8b890');
-  drawTextC(ctx, 'CONTINUE AS:', VIEW_W / 2, 70, pcol);
+  const ptag = G.playerCount > 1 ? L('ui_player', tk.pIdx + 1) + ' ' : '';
+  drawTextCS(ctx, ptag + (sw ? L('ui_switchBee') : L('ui_beeLost')), VIEW_W / 2, 38, sw ? pcol : '#ff5040', 2);
+  if (!sw) drawTextC(ctx, L('ui_hiveLives'), VIEW_W / 2, 58, '#c8b890');
+  drawTextC(ctx, L('ui_continueAs'), VIEW_W / 2, 70, pcol);
   for (let i = 0; i < tk.list.length; i++) {
     const a = tk.list[i];
     const sel = i === tk.sel;
-    const label = a.caste.toUpperCase() + '  HP ' + Math.ceil(a.hp) + '/' + a.maxHp;
+    const label = L('ui_hp', casteName(a.caste), Math.ceil(a.hp), a.maxHp);
     if (sel) drawText(ctx, '\x06', 92, 84 + i * 12, '#ffe040');
     drawText(ctx, label, 104, 84 + i * 12, sel ? '#ffe040' : '#c8b890');
   }
-  drawTextC(ctx, 'ENTER: TAKE OVER', VIEW_W / 2, 160, '#a09070');
+  drawTextC(ctx, sw ? L('ui_switchKeys') : L('ui_takeOver'), VIEW_W / 2, 160, '#a09070');
 }
 
 function updateDead() {
   const tk = G.takeover;
   if (!tk) { G.state = 'play'; return; }
-  tk.list = tk.list.filter(a => a.hp > 0);
-  if (tk.list.length === 0) { endWorld(); return; }
+  const sw = !!tk.prevBee;
+  // a live switch is cancellable; a death takeover is not
+  if (sw && tookPress('Escape')) { G.takeover = null; G.state = 'play'; Sfx.play('menu'); return; }
+  tk.list = tk.list.filter(a => a.hp > 0 && a.playerIdx < 0);
+  if (tk.list.length === 0) {
+    if (sw) { G.takeover = null; G.state = 'play'; G.msg(L('m_noSwitch'), '#ff8040'); return; }
+    endWorld(); return;
+  }
   tk.sel = Math.min(tk.sel, tk.list.length - 1);
   if (tookPress('ArrowUp') || tookPress('KeyW')) { tk.sel = (tk.sel + tk.list.length - 1) % tk.list.length; Sfx.play('menu'); }
   if (tookPress('ArrowDown') || tookPress('KeyS')) { tk.sel = (tk.sel + 1) % tk.list.length; Sfx.play('menu'); }
   if (tookPress('Enter') || tookPress('Space')) {
     const a = tk.list[tk.sel];
-    a.playerIdx = tk.pIdx; a.state = 'idle';
+    if (sw) {
+      // release the current bee back into the colony
+      const prev = tk.prevBee;
+      if (prev && prev.hp > 0) { prev.playerIdx = -1; prev.state = 'idle'; prev.stateT = 30; }
+    } else {
+      G.deadQueue.shift();
+    }
+    a.playerIdx = tk.pIdx; a.state = 'idle'; a.layerCd = 18;
     G.players[tk.pIdx].bee = a;
+    G.players[tk.pIdx].trans = null;
     G.players[tk.pIdx].cam = { x: a.x - VIEW_W / 2, y: a.y - 60 };
-    G.deadQueue.shift(); G.takeover = null; G.state = 'play';
-    G.msg('NOW FLYING: ' + a.caste.toUpperCase(), tk.pIdx === 0 ? '#ffe080' : '#80d0ff');
+    G.takeover = null; G.state = 'play';
+    G.msg(L('m_nowFlying', casteName(a.caste)), tk.pIdx === 0 ? '#ffe080' : '#80d0ff');
     Sfx.play('select');
   }
 }
@@ -992,26 +1125,26 @@ function drawEnd(won) {
   ctx.fillStyle = '#170f06'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   const s = G.endStats;
   if (won) {
-    drawTextCS(ctx, 'THE HIVE WILL', VIEW_W / 2, 22, '#ffd040', 2);
-    drawTextCS(ctx, 'SURVIVE THE WINTER', VIEW_W / 2, 40, '#ffd040', 2);
+    drawTextCS(ctx, L('ui_win1'), VIEW_W / 2, 22, '#ffd040', 2);
+    drawTextCS(ctx, L('ui_win2'), VIEW_W / 2, 40, '#ffd040', 2);
   } else {
-    drawTextCS(ctx, 'THE HIVE', VIEW_W / 2, 24, '#ff5040', 2);
-    drawTextCS(ctx, 'HAS FALLEN', VIEW_W / 2, 42, '#ff5040', 2);
+    drawTextCS(ctx, L('ui_lose1'), VIEW_W / 2, 24, '#ff5040', 2);
+    drawTextCS(ctx, L('ui_lose2'), VIEW_W / 2, 42, '#ff5040', 2);
   }
   if (s) {
     const lines = [
-      ['LASTED ' + (s.day + 1) + ' DAYS', '#c8b890'],
-      ['FINAL SCORE: ' + s.score, '#ffe040'],
-      ['HONEY STORED: ' + Math.floor(s.stats.honeyStored), '#e8b830'],
-      ['BROOD RAISED: ' + s.stats.broodRaised, '#a09070'],
-      ['BEES BORN: ' + s.stats.beesBorn, '#a09070'],
-      ['BEES LOST: ' + s.stats.beesLost, '#a09070'],
-      ['THREATS SLAIN: ' + s.stats.threatsSlain, '#a09070'],
+      [L('ui_lasted', s.day + 1), '#c8b890'],
+      [L('ui_finalScore', s.score), '#ffe040'],
+      [L('ui_honeyStored', Math.floor(s.stats.honeyStored)), '#e8b830'],
+      [L('ui_broodRaised', s.stats.broodRaised), '#a09070'],
+      [L('ui_beesBorn', s.stats.beesBorn), '#a09070'],
+      [L('ui_beesLost', s.stats.beesLost), '#a09070'],
+      [L('ui_threatsSlain', s.stats.threatsSlain), '#a09070'],
     ];
     let y = 72;
     for (const [line, color] of lines) { drawTextC(ctx, line, VIEW_W / 2, y, color); y += 12; }
   }
-  if ((G.tick >> 4) % 2 === 0) drawTextC(ctx, 'PRESS ENTER', VIEW_W / 2, 184, '#ffe040');
+  if ((G.tick >> 4) % 2 === 0) drawTextC(ctx, L('ui_pressEnter'), VIEW_W / 2, 184, '#ffe040');
   G.tick++;
 }
 
@@ -1024,7 +1157,7 @@ function updateEnd() {
 // ---------------------------------------------------------------------------
 function globalKeys() {
   if (tookPress('KeyC')) document.getElementById('crt').classList.toggle('off');
-  if (tookPress('KeyN')) { const m = Sfx.toggleMute(); if (G.state === 'play') G.msg('SOUND ' + (m ? 'OFF' : 'ON'), '#80c0ff'); }
+  if (tookPress('KeyN')) { const m = Sfx.toggleMute(); if (G.state === 'play') G.msg(L('m_sound', L(m ? 'w_off' : 'w_on')), '#80c0ff'); }
 }
 
 let last = 0, acc = 0;

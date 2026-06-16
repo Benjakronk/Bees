@@ -56,6 +56,8 @@ const Comb = {
     this.buildBuckets();
     this.computeNeighbors();
     if (rng) this.seedStartingState(rng);
+    // reset the cached render: origin and gradient are tied to this world/ctx
+    this._can = null; this._cctx = null; this._waxGrad = null; this._dirty = true;
   },
 
   // each cell's adjacent cells (the six hex neighbours), for the build frontier
@@ -155,6 +157,7 @@ const Comb = {
   },
   buildCell(c) {
     c.built = true; c.type = 'empty'; c.amount = 0; c.capped = false;
+    this._dirty = true;
   },
   builtEmptyCount() {
     let n = 0;
@@ -222,28 +225,72 @@ const Comb = {
   },
 
   // ----- rendering ----------------------------------------------------------
-  draw(ctx, camx, camy, vw, vh) {
-    const h = this.hive;
-    const x0s = h.cavX0 - camx, y0s = h.cavY0 - camy;
+  // The comb is hundreds of hex path-fills -- far too costly to redraw every
+  // frame in a developed hive. Instead it is painted once into an offscreen
+  // canvas covering the cavity and blitted each frame, re-rendered only on a
+  // short cadence (cells change slowly). Live shimmer/blink ride on top as a
+  // cheap per-frame overlay.
+  _can: null, _cctx: null, _cox: 0, _coy: 0, _dirty: true, _lastRender: -999,
+
+  // force a re-render on the next draw (after build / load / big changes)
+  touch() { this._dirty = true; },
+
+  ensureCanvas() {
+    if (this._can) return;
+    const h = this.hive, pad = 12;
+    this._cox = h.cavX0 - pad; this._coy = h.cavY0 - pad;
+    this._can = document.createElement('canvas');
+    this._can.width = (h.cavX1 - h.cavX0) + pad * 2;
+    this._can.height = (h.cavY1 - h.cavY0) + pad * 2;
+    this._cctx = this._can.getContext('2d');
+    this._dirty = true;
+  },
+
+  renderCanvas() {
+    const g2 = this._cctx, h = this.hive;
+    g2.clearRect(0, 0, this._can.width, this._can.height);
+    // wax backdrop so air pockets never show through to the trunk cutaway
     const ww = h.cavX1 - h.cavX0, hh = h.cavY1 - h.cavY0;
-    // wax backdrop behind the comb (so air pockets never show sky)
-    if (x0s < vw && x0s + ww > 0 && y0s < vh && y0s + hh > 0) {
-      const g = ctx.createLinearGradient(0, y0s, 0, y0s + hh);
-      g.addColorStop(0, '#4a3618');   // dark hollow interior; built comb pops out
-      g.addColorStop(1, '#2f2210');
-      ctx.fillStyle = g;
-      ctx.fillRect(x0s, y0s, ww, hh);
+    if (!this._waxGrad) {
+      const g = g2.createLinearGradient(0, 0, 0, hh);
+      g.addColorStop(0, '#4a3618'); g.addColorStop(1, '#2f2210');
+      this._waxGrad = g;
     }
+    g2.save();
+    g2.translate(h.cavX0 - this._cox, h.cavY0 - this._coy);
+    g2.fillStyle = this._waxGrad;
+    g2.fillRect(0, 0, ww, hh);
+    g2.restore();
     for (const c of this.cells) {
-      const ex = c.x - camx, ey = c.y - camy;
-      if (ex < -8 || ex > vw + 8 || ey < -8 || ey > vh + 8) continue;
-      if (c.built) this.drawCell(ctx, c, ex, ey);
+      const ex = c.x - this._cox, ey = c.y - this._coy;
+      if (c.built) this.drawCell(g2, c, ex, ey);
       else if (c.nbrs && c.nbrs.some(n => n.built)) {
-        // build frontier: a faint dashed outline hinting where comb can grow
-        ctx.strokeStyle = 'rgba(210,180,110,0.28)';
-        ctx.lineWidth = 1;
-        hexStroke(ctx, ex, ey, 4.2);
+        g2.strokeStyle = 'rgba(210,180,110,0.28)';
+        g2.lineWidth = 1;
+        hexStroke(g2, ex, ey, 4.2);
       }
+    }
+    this._dirty = false;
+    this._lastRender = G.tick;
+  },
+
+  draw(ctx, camx, camy, vw, vh) {
+    this.ensureCanvas();
+    if (this._dirty || G.tick - this._lastRender >= 8) this.renderCanvas();
+    // blit the overlapping region of the comb canvas into the viewport
+    let sx = camx - this._cox, sy = camy - this._coy, dx = 0, dy = 0, sw = vw, sh = vh;
+    if (sx < 0) { dx = -sx; sw += sx; sx = 0; }
+    if (sy < 0) { dy = -sy; sh += sy; sy = 0; }
+    if (sx + sw > this._can.width) sw = this._can.width - sx;
+    if (sy + sh > this._can.height) sh = this._can.height - sy;
+    if (sw > 0 && sh > 0) ctx.drawImage(this._can, sx, sy, sw, sh, dx, dy, sw, sh);
+    // live overlay: nectar shimmer + hungry-larva blink (a few cells, per frame)
+    for (const c of this.cells) {
+      if (!c.built) continue;
+      const ex = c.x - camx, ey = c.y - camy;
+      if (ex < -6 || ex > vw + 6 || ey < -6 || ey > vh + 6) continue;
+      if (c.type === 'nectar') { if (G.tick >> 3 & 1) { ctx.fillStyle = '#ffe27a'; ctx.fillRect(ex - 1, ey - 1, 1, 1); } }
+      else if (c.type === 'larva' && c.hungry && (G.tick >> 4 & 1)) { ctx.fillStyle = '#ff6050'; ctx.fillRect(ex, ey - 5, 1, 1); }
     }
   },
 
@@ -256,7 +303,6 @@ const Comb = {
       const lit = c.type === 'nectar';
       ctx.fillStyle = lit ? '#e6b43c' : '#e2a828';
       hex(ctx, ex, ey, 1.6 + a * 2.8);
-      if (lit && (G.tick >> 3 & 1)) { ctx.fillStyle = '#ffe27a'; ctx.fillRect(ex - 1, ey - 1, 1, 1); }
       if (c.capped) {
         ctx.fillStyle = '#d8b86a';   // wax cap
         hex(ctx, ex, ey, 4.0);
@@ -284,7 +330,6 @@ const Comb = {
       hex(ctx, ex, ey, r);
       ctx.fillStyle = '#dcd2ae';
       ctx.fillRect(ex - 1, ey, 1, 1);
-      if (c.hungry && (G.tick >> 4 & 1)) { ctx.fillStyle = '#ff6050'; ctx.fillRect(ex, ey - 5, 1, 1); }
     } else if (c.type === 'pupa') {
       ctx.fillStyle = '#caa463';   // brown wax cap over a developing bee
       hex(ctx, ex, ey, 4.0);
@@ -310,6 +355,7 @@ const Comb = {
       c.built = s.b === undefined ? true : !!s.b;
       c.queen = !!s.q;
     }
+    this._dirty = true;
   },
 };
 
