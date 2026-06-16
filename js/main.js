@@ -817,8 +817,8 @@ function drawHud() {
     if (p.bee) {
       drawHpBar(px + 14, y + 4, 40, Math.max(0, p.bee.hp / p.bee.maxHp));
       drawLoadBar(px + 14, y + 11, 40, p.bee.nectar / p.bee.def.nectarCap, '#e8b830');
-      drawLoadBar(px + 14, y + 15, 40, p.bee.def.pollenCap ? p.bee.pollen / p.bee.def.pollenCap : 0, '#e07828');
-      drawText(ctx, casteName(p.bee.caste), px + 14, y + 18, '#b0a080');
+      drawLoadBar(px + 14, y + 14, 40, p.bee.def.pollenCap ? p.bee.pollen / p.bee.def.pollenCap : 0, '#e07828');
+      drawText(ctx, casteName(p.bee.caste), px + 14, y + 17, '#b0a080');
     } else { drawText(ctx, L('w_down'), px + 14, y + 5, '#e03020'); }
   }
 
